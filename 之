@@ -2960,6 +2960,145 @@ task.spawn(function()
     makeToggle("显示距离", function(s) espCfg.Distance = s end)
     makeToggle("显示底部射线", function(s) espCfg.Tracer = s end)
     makeToggle("人物高亮发光", function(s) espCfg.Highlight = s end)
+
+    -- ============ 👹 NPC 透视（跟玩家透视一样多） ============
+    local npcCfg = {
+        Enabled = false, Box = false, Name = false,
+        Health = false, Distance = false, Tracer = false, Highlight = false
+    }
+    local NPC_Cache = {}
+    local NPC_Conn = nil
+    local NPC_Highlights = {}
+
+    local function npcIsPlayer(model)
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character == model or model.Name == p.Name then return true end
+        end
+        return false
+    end
+
+    local function npcIsNPC(model)
+        if not model:IsA("Model") then return false end
+        if model == player.Character then return false end
+        if npcIsPlayer(model) then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return false end
+        local root = model:FindFirstChild("HumanoidRootPart")
+            or model:FindFirstChild("UpperTorso")
+            or model:FindFirstChild("Torso")
+            or model.PrimaryPart
+        if not root then return false end
+        return true, root, hum
+    end
+
+    local function npcClean()
+        for _, d in pairs(NPC_Cache) do
+            for _, o in pairs(d) do pcall(function() o:Remove() end) end
+        end
+        NPC_Cache = {}
+        for _, hl in pairs(NPC_Highlights) do pcall(function() hl:Destroy() end) end
+        NPC_Highlights = {}
+    end
+
+    local function npcNew(model)
+        if NPC_Cache[model] then return NPC_Cache[model] end
+        local d = {
+            Box = Drawing.new("Square"),
+            Name = Drawing.new("Text"),
+            Health = Drawing.new("Text"),
+            Distance = Drawing.new("Text"),
+            Tracer = Drawing.new("Line")
+        }
+        d.Box.Thickness = 1; d.Box.Filled = false; d.Box.Transparency = 1; d.Box.Color = Color3.fromRGB(255, 80, 80)
+        d.Name.Size = 13; d.Name.Center = true; d.Name.Outline = true; d.Name.Color = Color3.fromRGB(255, 80, 80)
+        d.Health.Size = 12; d.Health.Outline = true; d.Health.Color = Color3.fromRGB(0, 255, 0)
+        d.Distance.Size = 12; d.Distance.Center = true; d.Distance.Outline = true; d.Distance.Color = Color3.fromRGB(255, 255, 0)
+        d.Tracer.Thickness = 1; d.Tracer.Color = Color3.fromRGB(255, 80, 80)
+        for _, o in pairs(d) do o.Visible = false end
+        NPC_Cache[model] = d
+        return d
+    end
+
+    local function npcHide(model)
+        local d = NPC_Cache[model]
+        if not d then return end
+        for _, o in pairs(d) do o.Visible = false end
+    end
+
+    local function npcStart()
+        if NPC_Conn then NPC_Conn:Disconnect() end
+        NPC_Conn = RunService.RenderStepped:Connect(function()
+            if not npcCfg.Enabled then npcClean() return end
+            local cam = Workspace.CurrentCamera
+            if not cam then return end
+            local mePos = cam.CFrame.Position
+
+            -- 扫所有 Model 判断 NPC
+            for _, model in ipairs(Workspace:GetDescendants()) do
+                if model:IsA("Model") then
+                    local ok, root, hum = npcIsNPC(model)
+                    if ok and root and root.Parent then
+                        local dist = (root.Position - mePos).Magnitude
+                        local rp, onScr = cam:WorldToViewportPoint(root.Position)
+                        local head = model:FindFirstChild("Head")
+                        local hp = head and cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.6, 0)) or rp
+
+                        if not onScr or dist > 1000 then
+                            npcHide(model)
+                            if NPC_Highlights[model] then NPC_Highlights[model].Enabled = false end
+                        else
+                            local d = npcNew(model)
+                            local hh = math.abs(rp.Y - hp.Y) * 2.4
+                            if hh < 10 then hh = 20 end
+                            local ww = hh * 0.55
+                            local tl = Vector2.new(rp.X - ww / 2, rp.Y - hh / 2)
+
+                            d.Box.Visible = npcCfg.Box
+                            if npcCfg.Box then d.Box.Size = Vector2.new(ww, hh); d.Box.Position = tl end
+
+                            d.Name.Visible = npcCfg.Name
+                            if npcCfg.Name then d.Name.Position = Vector2.new(rp.X, tl.Y - 16); d.Name.Text = "👹 " .. model.Name end
+
+                            d.Health.Visible = npcCfg.Health
+                            if npcCfg.Health then d.Health.Position = Vector2.new(tl.X - 42, tl.Y); d.Health.Text = string.format("HP:%d", math.floor(hum.Health)) end
+
+                            d.Distance.Visible = npcCfg.Distance
+                            if npcCfg.Distance then d.Distance.Position = Vector2.new(rp.X, tl.Y + hh + 4); d.Distance.Text = string.format("[%dm]", math.floor(dist)) end
+
+                            d.Tracer.Visible = npcCfg.Tracer
+                            if npcCfg.Tracer then d.Tracer.From = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y); d.Tracer.To = Vector2.new(rp.X, rp.Y) end
+
+                            if npcCfg.Highlight then
+                                if not NPC_Highlights[model] or not NPC_Highlights[model].Parent then
+                                    local hl = Instance.new("Highlight")
+                                    hl.FillColor = Color3.fromRGB(255, 80, 80)
+                                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                                    hl.FillTransparency = 0.5; hl.OutlineTransparency = 0
+                                    hl.Adornee = model; hl.Parent = model
+                                    NPC_Highlights[model] = hl
+                                end
+                                NPC_Highlights[model].Enabled = true
+                            else
+                                if NPC_Highlights[model] then NPC_Highlights[model].Enabled = false end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    -- 加 6 个 NPC 透视开关（和玩家透视一模一样，直接排在下面）
+    makeToggle("👹 开启 NPC 透视总开关", function(s)
+        npcCfg.Enabled = s
+        if s then npcStart() else npcClean() end
+    end)
+    makeToggle("NPC 显示方框", function(s) npcCfg.Box = s end)
+    makeToggle("NPC 显示名字", function(s) npcCfg.Name = s end)
+    makeToggle("NPC 显示血量", function(s) npcCfg.Health = s end)
+    makeToggle("NPC 显示距离", function(s) npcCfg.Distance = s end)
+    makeToggle("NPC 显示底部射线", function(s) npcCfg.Tracer = s end)
+    makeToggle("NPC 人物高亮发光", function(s) npcCfg.Highlight = s end)
 end)
 -- =========================================================
 -- 🤝 末尾补丁：互动范围显示 + 自动互动 + 透视
@@ -6624,4 +6763,1348 @@ task.spawn(function()
     end, Color3.fromRGB(220, 80, 80))
 
     print("[相机v3] 注入成功")
+end)
+-- =========================================================
+-- 🧪 内测人员极速追加补丁（无延迟版 · 已去QQ按钮）
+-- =========================================================
+task.spawn(function()
+    local Players = game:GetService("Players")
+    local TweenService = game:GetService("TweenService")
+    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+    
+    -- 【极速检测】：0.01秒检查一次，只要一生成瞬间插入
+    local page = nil
+    while not page do
+        local n9 = playerGui:FindFirstChild("N9Hub")
+        if n9 then
+            local win = n9:FindFirstChild("MainWindow")
+            if win then
+                for _, v in ipairs(win:GetDescendants()) do
+                    if v:IsA("Frame") and v.Name == "Page_内测人员" then
+                        page = v
+                        break
+                    end
+                end
+            end
+        end
+        if not page then task.wait(0.01) end
+    end
+
+    -- 防重复检查
+    if page:FindFirstChild("ShenNewMember") then return end
+
+    -- ================= 新成员信息 =================
+    local member = {
+        title    = "测试人员",
+        name     = "HPttttt",          
+        contact  = "快手号：5837278690",  
+        copyText = "5837278690",          
+        avatar   = "rbxassetid://118929068984066", 
+    }
+    -- ==============================================
+
+    -- 寻找「蛋仔派对板栗王」的位置
+    local templateOrder = 1
+    for _, v in ipairs(page:GetChildren()) do
+        if v:IsA("Frame") then
+            local hasName = false
+            for _, d in ipairs(v:GetDescendants()) do
+                if d:IsA("TextLabel") and d.Text:find("蛋仔派对板栗王") then
+                    hasName = true
+                    break
+                end
+            end
+            if hasName then
+                templateOrder = v.LayoutOrder or 1
+                break
+            end
+        end
+    end
+
+    -- 把排在板栗王后面的卡片，全部往后推 1 位
+    for _, c in ipairs(page:GetChildren()) do
+        if c:IsA("Frame") and c.LayoutOrder and c.LayoutOrder > templateOrder then
+            c.LayoutOrder = c.LayoutOrder + 1
+        end
+    end
+
+    -- 创建卡片
+    local card = Instance.new("Frame")
+    card.Name = "ShenNewMember"
+    card.Size = UDim2.new(1, 0, 0, 76)
+    card.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    card.BackgroundTransparency = 0.4
+    card.BorderSizePixel = 0
+    card.LayoutOrder = templateOrder + 1 -- 插在板栗王下面
+    card.Parent = page
+
+    local cc = Instance.new("UICorner"); cc.CornerRadius = UDim.new(0, 6); cc.Parent = card
+    local cs = Instance.new("UIStroke"); cs.Color = Color3.fromRGB(255, 255, 255); cs.Thickness = 1; cs.Transparency = 0.5; cs.Parent = card
+    
+    local cp = Instance.new("UIPadding")
+    cp.PaddingTop = UDim.new(0, 10); cp.PaddingBottom = UDim.new(0, 10)
+    cp.PaddingLeft = UDim.new(0, 10); cp.PaddingRight = UDim.new(0, 10)
+    cp.Parent = card
+
+    -- 头像框
+    local avatarFrame = Instance.new("Frame")
+    avatarFrame.Size = UDim2.fromOffset(50, 50)
+    avatarFrame.Position = UDim2.new(0, 0, 0.5, -25)
+    avatarFrame.BackgroundColor3 = Color3.fromRGB(200, 205, 215)
+    avatarFrame.Parent = card
+    local ac = Instance.new("UICorner"); ac.CornerRadius = UDim.new(999, 0); ac.Parent = avatarFrame
+    local as = Instance.new("UIStroke"); as.Color = Color3.fromRGB(0, 140, 255); as.Thickness = 1; as.Transparency = 0.5; as.Parent = avatarFrame
+
+    local avatarImg = Instance.new("ImageLabel")
+    avatarImg.Size = UDim2.fromScale(1, 1)
+    avatarImg.BackgroundTransparency = 1
+    avatarImg.Image = member.avatar
+    avatarImg.ScaleType = Enum.ScaleType.Crop
+    avatarImg.Parent = avatarFrame
+    local aic = Instance.new("UICorner"); aic.CornerRadius = UDim.new(999, 0); aic.Parent = avatarImg
+
+    -- 文字内容
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size = UDim2.new(1, -190, 0, 16); titleLbl.Position = UDim2.fromOffset(60, 0)
+    titleLbl.BackgroundTransparency = 1; titleLbl.Text = member.title
+    titleLbl.TextColor3 = Color3.fromRGB(0, 140, 255); titleLbl.Font = Enum.Font.GothamBold
+    titleLbl.TextSize = 12; titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.Parent = card
+
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Size = UDim2.new(1, -190, 0, 16); nameLbl.Position = UDim2.fromOffset(60, 18)
+    nameLbl.BackgroundTransparency = 1; nameLbl.Text = member.name
+    nameLbl.TextColor3 = Color3.fromRGB(30, 40, 60); nameLbl.Font = Enum.Font.GothamMedium
+    nameLbl.TextSize = 11; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    nameLbl.Parent = card
+
+    local contactLbl = Instance.new("TextLabel")
+    contactLbl.Size = UDim2.new(1, -190, 0, 16); contactLbl.Position = UDim2.fromOffset(60, 36)
+    contactLbl.BackgroundTransparency = 1; contactLbl.Text = member.contact
+    contactLbl.TextColor3 = Color3.fromRGB(100, 110, 130); contactLbl.Font = Enum.Font.GothamMedium
+    contactLbl.TextSize = 10; contactLbl.TextXAlignment = Enum.TextXAlignment.Left
+    contactLbl.Parent = card
+
+    -- 🔑 重点：只留一个复制快手按钮，并且高度居中
+    local copyKsBtn = Instance.new("TextButton")
+    copyKsBtn.Size = UDim2.fromOffset(60, 24) -- 稍微加高了一点，更美观
+    copyKsBtn.Position = UDim2.new(1, -60, 0.5, -12) -- 垂直居中
+    copyKsBtn.BackgroundColor3 = Color3.fromRGB(200, 205, 215)
+    copyKsBtn.BackgroundTransparency = 0.5
+    copyKsBtn.Text = "复制快手"
+    copyKsBtn.TextColor3 = Color3.fromRGB(0, 140, 255)
+    copyKsBtn.Font = Enum.Font.GothamBold
+    copyKsBtn.TextSize = 10
+    copyKsBtn.AutoButtonColor = false
+    copyKsBtn.Parent = card
+    local kc = Instance.new("UICorner"); kc.CornerRadius = UDim.new(0, 6); kc.Parent = copyKsBtn
+
+    -- 动画效果
+    copyKsBtn.MouseEnter:Connect(function()
+        pcall(function() 
+            TweenService:Create(copyKsBtn, TweenInfo.new(0.15), {
+                BackgroundColor3 = Color3.fromRGB(0, 140, 255), 
+                BackgroundTransparency = 0.2, 
+                TextColor3 = Color3.fromRGB(255,255,255)
+            }):Play() 
+        end)
+    end)
+    copyKsBtn.MouseLeave:Connect(function()
+        pcall(function() 
+            TweenService:Create(copyKsBtn, TweenInfo.new(0.15), {
+                BackgroundColor3 = Color3.fromRGB(200, 205, 215), 
+                BackgroundTransparency = 0.5, 
+                TextColor3 = Color3.fromRGB(0, 140, 255)
+            }):Play() 
+        end)
+    end)
+
+    -- 复制功能
+    copyKsBtn.MouseButton1Click:Connect(function()
+        pcall(function()
+            if setclipboard then
+                setclipboard(member.copyText)
+                copyKsBtn.Text = "已复制!"
+                task.delay(1.5, function() pcall(function() copyKsBtn.Text = "复制快手" end) end)
+            end
+        end)
+    end)
+end)
+-- =========================================================
+-- 🧪 内测人员追加：作者下方添加“复制QQ群”按钮（无延迟版）
+-- =========================================================
+task.spawn(function()
+    local Players = game:GetService("Players")
+    local TweenService = game:GetService("TweenService")
+    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+    
+    -- 【极速检测】：0.01秒检查一次，只要一生成瞬间插入
+    local page = nil
+    while not page do
+        local n9 = playerGui:FindFirstChild("N9Hub")
+        if n9 then
+            local win = n9:FindFirstChild("MainWindow")
+            if win then
+                for _, v in ipairs(win:GetDescendants()) do
+                    if v:IsA("Frame") and v.Name == "Page_内测人员" then
+                        page = v
+                        break
+                    end
+                end
+            end
+        end
+        if not page then task.wait(0.01) end
+    end
+
+    -- 防重复检查
+    if page:FindFirstChild("ShenCopyQQGroupBtn") then return end
+
+    -- 寻找「作者」的卡片位置
+    local authorOrder = 0
+    for _, v in ipairs(page:GetChildren()) do
+        if v:IsA("Frame") then
+            local hasAuthor = false
+            for _, d in ipairs(v:GetDescendants()) do
+                if d:IsA("TextLabel") and (d.Text:find("神 %(Shen Hub") or d.Text:find("快手号: 5733022742")) then
+                    hasAuthor = true
+                    break
+                end
+            end
+            if hasAuthor then
+                authorOrder = v.LayoutOrder or 0
+                break
+            end
+        end
+    end
+
+    -- 把排在作者后面的卡片，全部往后推 1 位
+    for _, c in ipairs(page:GetChildren()) do
+        if c:IsA("Frame") and c.LayoutOrder and c.LayoutOrder > authorOrder then
+            c.LayoutOrder = c.LayoutOrder + 1
+        end
+    end
+
+    -- 创建「点击复制QQ群」的卡片
+    local btnCard = Instance.new("Frame")
+    btnCard.Name = "ShenCopyQQGroupBtn"
+    btnCard.Size = UDim2.new(1, 0, 0, 36) -- 高度稍微小一点，不占太多空间
+    btnCard.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    btnCard.BackgroundTransparency = 0.4
+    btnCard.BorderSizePixel = 0
+    btnCard.LayoutOrder = authorOrder + 1 -- 插在作者下面
+    btnCard.Parent = page
+
+    local cc = Instance.new("UICorner"); cc.CornerRadius = UDim.new(0, 6); cc.Parent = btnCard
+    local cs = Instance.new("UIStroke"); cs.Color = Color3.fromRGB(255, 255, 255); cs.Thickness = 1; cs.Transparency = 0.5; cs.Parent = btnCard
+
+    -- 创建可点击的文本按钮
+    local copyBtn = Instance.new("TextButton")
+    copyBtn.Size = UDim2.fromScale(1, 1)
+    copyBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 255) -- 蓝色背景，非常显眼
+    copyBtn.BackgroundTransparency = 0 -- 不透明
+    copyBtn.Text = "点击复制官方 QQ群"
+    copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    copyBtn.Font = Enum.Font.GothamBold
+    copyBtn.TextSize = 12
+    copyBtn.AutoButtonColor = false
+    copyBtn.Parent = btnCard
+    local bc = Instance.new("UICorner"); bc.CornerRadius = UDim.new(0, 6); bc.Parent = copyBtn
+
+    -- 动画效果
+    copyBtn.MouseEnter:Connect(function()
+        pcall(function() 
+            TweenService:Create(copyBtn, TweenInfo.new(0.15), {
+                BackgroundColor3 = Color3.fromRGB(70, 180, 255)
+            }):Play() 
+        end)
+    end)
+    copyBtn.MouseLeave:Connect(function()
+        pcall(function() 
+            TweenService:Create(copyBtn, TweenInfo.new(0.15), {
+                BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+            }):Play() 
+        end)
+    end)
+
+    -- 点击复制功能
+    copyBtn.MouseButton1Click:Connect(function()
+        pcall(function()
+            if setclipboard then
+                setclipboard("1126544677")
+                copyBtn.Text = "✅ 已复制：1126544677"
+                copyBtn.BackgroundColor3 = Color3.fromRGB(60, 200, 120) -- 变成绿色提示成功
+                task.delay(2, function() 
+                    pcall(function() 
+                        copyBtn.Text = "点击复制官方 QQ群" 
+                        copyBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+                    end) 
+                end)
+            end
+        end)
+    end)
+end)
+-- =========================================================
+-- 🧪 内测人员终极整合补丁 v3（强制顺序 + 清理重复）
+-- =========================================================
+task.spawn(function()
+    local Players = game:GetService("Players")
+    local TweenService = game:GetService("TweenService")
+    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+    
+    -- 找页面
+    local page = nil
+    while not page do
+        local n9 = playerGui:FindFirstChild("N9Hub")
+        if n9 then
+            local win = n9:FindFirstChild("MainWindow")
+            if win then
+                for _, v in ipairs(win:GetDescendants()) do
+                    if v:IsA("Frame") and v.Name == "Page_内测人员" then
+                        page = v
+                        break
+                    end
+                end
+            end
+        end
+        if not page then task.wait(0.01) end
+    end
+
+    -- 🧹 1. 清理之前测试留下的所有重复卡片
+    for _, child in ipairs(page:GetChildren()) do
+        if child:IsA("Frame") and (child.Name:find("Shen") or child.Name:find("NewMember")) then
+            child:Destroy()
+        end
+    end
+
+    -- 🛠️ 2. 通用卡片生成器
+    local function createCard(isQQGroup, name, contact, copyText, qq, avatarId)
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 0, isQQGroup and 36 or 76)
+        card.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        card.BackgroundTransparency = 0.4
+        card.BorderSizePixel = 0
+        card.Parent = page
+
+        local cc = Instance.new("UICorner"); cc.CornerRadius = UDim.new(0, 6); cc.Parent = card
+        local cs = Instance.new("UIStroke"); cs.Color = Color3.fromRGB(255, 255, 255); cs.Thickness = 1; cs.Transparency = 0.5; cs.Parent = card
+
+        if isQQGroup then
+            local copyBtn = Instance.new("TextButton")
+            copyBtn.Size = UDim2.fromScale(1, 1)
+            copyBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+            copyBtn.Text = "点击复制官方 QQ群"
+            copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            copyBtn.Font = Enum.Font.GothamBold
+            copyBtn.TextSize = 12
+            copyBtn.AutoButtonColor = false
+            copyBtn.Parent = card
+            local bc = Instance.new("UICorner"); bc.CornerRadius = UDim.new(0, 6); bc.Parent = copyBtn
+
+            copyBtn.MouseButton1Click:Connect(function()
+                pcall(function()
+                    if setclipboard then
+                        setclipboard("1126544677")
+                        copyBtn.Text = "✅ 已复制：1126544677"
+                        copyBtn.BackgroundColor3 = Color3.fromRGB(60, 200, 120)
+                        task.delay(2, function() 
+                            copyBtn.Text = "点击复制官方 QQ群" 
+                            copyBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+                        end)
+                    end
+                end)
+            end)
+            return card
+        end
+
+        -- 普通人员卡片
+        local cp = Instance.new("UIPadding")
+        cp.PaddingTop = UDim.new(0, 10); cp.PaddingBottom = UDim.new(0, 10)
+        cp.PaddingLeft = UDim.new(0, 10); cp.PaddingRight = UDim.new(0, 10)
+        cp.Parent = card
+
+        local avatarFrame = Instance.new("Frame")
+        avatarFrame.Size = UDim2.fromOffset(50, 50)
+        avatarFrame.Position = UDim2.new(0, 0, 0.5, -25)
+        avatarFrame.BackgroundColor3 = Color3.fromRGB(200, 205, 215)
+        avatarFrame.Parent = card
+        local ac = Instance.new("UICorner"); ac.CornerRadius = UDim.new(999, 0); ac.Parent = avatarFrame
+        local as = Instance.new("UIStroke"); as.Color = Color3.fromRGB(0, 140, 255); as.Thickness = 1; as.Transparency = 0.5; as.Parent = avatarFrame
+
+        local avatarImg = Instance.new("ImageLabel")
+        avatarImg.Size = UDim2.fromScale(1, 1)
+        avatarImg.BackgroundTransparency = 1
+        avatarImg.Image = avatarId
+        avatarImg.ScaleType = Enum.ScaleType.Crop
+        avatarImg.Parent = avatarFrame
+        local aic = Instance.new("UICorner"); aic.CornerRadius = UDim.new(999, 0); aic.Parent = avatarImg
+
+        local titleLbl = Instance.new("TextLabel")
+        titleLbl.Size = UDim2.new(1, -190, 0, 16); titleLbl.Position = UDim2.fromOffset(60, 0)
+        titleLbl.BackgroundTransparency = 1; titleLbl.Text = "测试人员"
+        titleLbl.TextColor3 = Color3.fromRGB(0, 140, 255); titleLbl.Font = Enum.Font.GothamBold
+        titleLbl.TextSize = 12; titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+        titleLbl.Parent = card
+
+        local nameLbl = Instance.new("TextLabel")
+        nameLbl.Size = UDim2.new(1, -190, 0, 16); nameLbl.Position = UDim2.fromOffset(60, 18)
+        nameLbl.BackgroundTransparency = 1; nameLbl.Text = name
+        nameLbl.TextColor3 = Color3.fromRGB(30, 40, 60); nameLbl.Font = Enum.Font.GothamMedium
+        nameLbl.TextSize = 11; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+        nameLbl.Parent = card
+
+        local contactLbl = Instance.new("TextLabel")
+        contactLbl.Size = UDim2.new(1, -190, 0, 16); contactLbl.Position = UDim2.fromOffset(60, 36)
+        contactLbl.BackgroundTransparency = 1; contactLbl.Text = contact
+        contactLbl.TextColor3 = Color3.fromRGB(100, 110, 130); contactLbl.Font = Enum.Font.GothamMedium
+        contactLbl.TextSize = 10; contactLbl.TextXAlignment = Enum.TextXAlignment.Left
+        contactLbl.Parent = card
+
+        local copyKsBtn = Instance.new("TextButton")
+        copyKsBtn.Size = UDim2.fromOffset(60, 20); copyKsBtn.Position = UDim2.new(1, -60, 0.5, 4)
+        copyKsBtn.BackgroundColor3 = Color3.fromRGB(200, 205, 215); copyKsBtn.BackgroundTransparency = 0.5
+        copyKsBtn.Text = "复制快手"; copyKsBtn.TextColor3 = Color3.fromRGB(0, 140, 255)
+        copyKsBtn.Font = Enum.Font.GothamBold; copyKsBtn.TextSize = 10
+        copyKsBtn.AutoButtonColor = false; copyKsBtn.Parent = card
+        local kc = Instance.new("UICorner"); kc.CornerRadius = UDim.new(0, 6); kc.Parent = copyKsBtn
+
+        copyKsBtn.MouseButton1Click:Connect(function()
+            pcall(function()
+                if setclipboard then
+                    setclipboard(copyText)
+                    copyKsBtn.Text = "已复制!"
+                    task.delay(1.5, function() copyKsBtn.Text = "复制快手" end)
+                end
+            end)
+        end)
+
+        if qq and qq ~= "" then
+            local copyQQBtn = Instance.new("TextButton")
+            copyQQBtn.Size = UDim2.fromOffset(60, 20); copyQQBtn.Position = UDim2.new(1, -60, 0.5, -24)
+            copyQQBtn.BackgroundColor3 = Color3.fromRGB(200, 205, 215); copyQQBtn.BackgroundTransparency = 0.5
+            copyQQBtn.Text = "复制 QQ"; copyQQBtn.TextColor3 = Color3.fromRGB(0, 140, 255)
+            copyQQBtn.Font = Enum.Font.GothamBold; copyQQBtn.TextSize = 10
+            copyQQBtn.AutoButtonColor = false; copyQQBtn.Parent = card
+            local qc = Instance.new("UICorner"); qc.CornerRadius = UDim.new(0, 6); qc.Parent = copyQQBtn
+
+            copyQQBtn.MouseButton1Click:Connect(function()
+                pcall(function()
+                    if setclipboard then
+                        setclipboard(tostring(qq))
+                        copyQQBtn.Text = "已复制!"
+                        task.delay(1.5, function() copyQQBtn.Text = "复制 QQ" end)
+                    end
+                end)
+            end)
+        else
+            copyKsBtn.Position = UDim2.new(1, -60, 0.5, -12)
+            copyKsBtn.Size = UDim2.fromOffset(60, 24)
+        end
+
+        return card
+    end
+
+    -- 🎯 3. 强制按顺序排列！
+    -- 直接把所有卡片按顺序强行塞进去，无视原来的计算逻辑
+    local order = 1
+
+    for _, v in ipairs(page:GetChildren()) do
+        if v:IsA("Frame") or v:IsA("TextLabel") then
+            -- 如果是作者卡片
+            local isAuthor = false
+            for _, d in ipairs(v:GetDescendants()) do
+                if d:IsA("TextLabel") and (d.Text:find("神 %(Shen Hub") or d.Text:find("快手号: 5733022742")) then
+                    isAuthor = true
+                    break
+                end
+            end
+            
+            if isAuthor then
+                v.LayoutOrder = order
+                order = order + 1
+                
+                -- 紧跟作者，加 QQ 群
+                local qqCard = createCard(true)
+                qqCard.LayoutOrder = order
+                order = order + 1
+                
+            elseif v:IsA("TextLabel") and (v.Text == "【 内测人员名单 】" or v.Text:find("内测人员名单")) then
+                v.LayoutOrder = order
+                order = order + 1
+                
+            elseif v:IsA("Frame") and v.Name == "ShenNewMember_蛋仔派对板栗王" then
+                -- 内部兜底：如果是板栗王（原版）
+                v.LayoutOrder = order
+                order = order + 1
+            else
+                -- 其他元素（比如板栗王在没被改名之前）
+                local isBanli = false
+                for _, d in ipairs(v:GetDescendants()) do
+                    if d:IsA("TextLabel") and d.Text:find("蛋仔派对板栗王") then
+                        isBanli = true
+                        break
+                    end
+                end
+                
+                if isBanli then
+                    v.LayoutOrder = order
+                    order = order + 1
+                    
+                    -- 板栗王下面紧跟 HPttttt
+                    local hpCard = createCard(false, "HPttttt", "快手号：5837278690", "5837278690", "", "rbxassetid://118929068984066")
+                    hpCard.LayoutOrder = order
+                    order = order + 1
+                    
+                    -- 再往下是第二个人（你在这里改信息）👇
+                    local secondCard = createCard(false, "这里填名字", "快手号：这里填", "这里填快手号", "这里填QQ", "rbxassetid://108164029972269")
+                    secondCard.LayoutOrder = order
+                    order = order + 1
+                    
+                else
+                    -- 其他多余的元素，直接丢到最后面去
+                    v.LayoutOrder = 999
+                end
+            end
+        end
+    end
+end)
+-- =========================================================
+-- 🧪 内测人员终极完美版 v6（标题归位 + 强制全排序）
+-- =========================================================
+task.spawn(function()
+    local Players = game:GetService("Players")
+    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+    
+    -- 等待页面加载
+    local page = nil
+    while not page do
+        local n9 = playerGui:FindFirstChild("N9Hub")
+        if n9 then
+            local win = n9:FindFirstChild("MainWindow")
+            if win then
+                for _, v in ipairs(win:GetDescendants()) do
+                    if v:IsA("Frame") and v.Name == "Page_内测人员" then
+                        page = v
+                        break
+                    end
+                end
+            end
+        end
+        if not page then task.wait(0.01) end
+    end
+
+    -- 🧹 1. 大扫除：彻底清空这个页面下的所有元素，准备重新建！
+    -- 这样就不会有任何残留的旧卡片和旧标题了
+    for _, child in ipairs(page:GetChildren()) do
+        if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
+            child:Destroy()
+        end
+    end
+
+    -- 🛠️ 2. 纯手工生成 UI 的通用函数
+    local order = 1
+    local function makeTitle(text)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1,0,0,20); lbl.BackgroundTransparency = 1
+        lbl.Text = text; lbl.TextColor3 = Color3.fromRGB(0, 140, 255)
+        lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 11; lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.LayoutOrder = order; order = order + 1
+        lbl.Parent = page
+        return lbl
+    end
+
+    local function createCard(isQQGroup, name, contact, copyText, qq, avatarId)
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 0, isQQGroup and 36 or 76)
+        card.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        card.BackgroundTransparency = 0.4
+        card.BorderSizePixel = 0
+        card.LayoutOrder = order; order = order + 1
+        card.Parent = page
+
+        local cc = Instance.new("UICorner"); cc.CornerRadius = UDim.new(0, 6); cc.Parent = card
+        local cs = Instance.new("UIStroke"); cs.Color = Color3.fromRGB(255, 255, 255); cs.Thickness = 1; cs.Transparency = 0.5; cs.Parent = card
+
+        if isQQGroup then
+            local copyBtn = Instance.new("TextButton")
+            copyBtn.Size = UDim2.fromScale(1, 1)
+            copyBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+            copyBtn.Text = "点击复制官方 QQ群"
+            copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            copyBtn.Font = Enum.Font.GothamBold
+            copyBtn.TextSize = 12
+            copyBtn.AutoButtonColor = false
+            copyBtn.Parent = card
+            local bc = Instance.new("UICorner"); bc.CornerRadius = UDim.new(0, 6); bc.Parent = copyBtn
+
+            copyBtn.MouseButton1Click:Connect(function()
+                pcall(function()
+                    if setclipboard then
+                        setclipboard("1126544677")
+                        copyBtn.Text = "✅ 已复制：1126544677"
+                        copyBtn.BackgroundColor3 = Color3.fromRGB(60, 200, 120)
+                        task.delay(2, function() 
+                            copyBtn.Text = "点击复制官方 QQ群" 
+                            copyBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
+                        end)
+                    end
+                end)
+            end)
+            return card
+        end
+
+        local cp = Instance.new("UIPadding")
+        cp.PaddingTop = UDim.new(0, 10); cp.PaddingBottom = UDim.new(0, 10)
+        cp.PaddingLeft = UDim.new(0, 10); cp.PaddingRight = UDim.new(0, 10)
+        cp.Parent = card
+
+        local avatarFrame = Instance.new("Frame")
+        avatarFrame.Size = UDim2.fromOffset(50, 50)
+        avatarFrame.Position = UDim2.new(0, 0, 0.5, -25)
+        avatarFrame.BackgroundColor3 = Color3.fromRGB(200, 205, 215)
+        avatarFrame.Parent = card
+        local ac = Instance.new("UICorner"); ac.CornerRadius = UDim.new(999, 0); ac.Parent = avatarFrame
+        local as = Instance.new("UIStroke"); as.Color = Color3.fromRGB(0, 140, 255); as.Thickness = 1; as.Transparency = 0.5; as.Parent = avatarFrame
+
+        local avatarImg = Instance.new("ImageLabel")
+        avatarImg.Size = UDim2.fromScale(1, 1)
+        avatarImg.BackgroundTransparency = 1
+        avatarImg.Image = avatarId
+        avatarImg.ScaleType = Enum.ScaleType.Crop
+        avatarImg.Parent = avatarFrame
+        local aic = Instance.new("UICorner"); aic.CornerRadius = UDim.new(999, 0); aic.Parent = avatarImg
+
+        local titleLbl = Instance.new("TextLabel")
+        titleLbl.Size = UDim2.new(1, -190, 0, 16); titleLbl.Position = UDim2.fromOffset(60, 0)
+        titleLbl.BackgroundTransparency = 1; titleLbl.Text = "测试人员"
+        titleLbl.TextColor3 = Color3.fromRGB(0, 140, 255); titleLbl.Font = Enum.Font.GothamBold
+        titleLbl.TextSize = 12; titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+        titleLbl.Parent = card
+
+        local nameLbl = Instance.new("TextLabel")
+        nameLbl.Size = UDim2.new(1, -190, 0, 16); nameLbl.Position = UDim2.fromOffset(60, 18)
+        nameLbl.BackgroundTransparency = 1; nameLbl.Text = name
+        nameLbl.TextColor3 = Color3.fromRGB(30, 40, 60); nameLbl.Font = Enum.Font.GothamMedium
+        nameLbl.TextSize = 11; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+        nameLbl.Parent = card
+
+        local contactLbl = Instance.new("TextLabel")
+        contactLbl.Size = UDim2.new(1, -190, 0, 16); contactLbl.Position = UDim2.fromOffset(60, 36)
+        contactLbl.BackgroundTransparency = 1; contactLbl.Text = contact
+        contactLbl.TextColor3 = Color3.fromRGB(100, 110, 130); contactLbl.Font = Enum.Font.GothamMedium
+        contactLbl.TextSize = 10; contactLbl.TextXAlignment = Enum.TextXAlignment.Left
+        contactLbl.Parent = card
+
+        local copyKsBtn = Instance.new("TextButton")
+        copyKsBtn.BackgroundColor3 = Color3.fromRGB(200, 205, 215); copyKsBtn.BackgroundTransparency = 0.5
+        copyKsBtn.Text = "复制快手"; copyKsBtn.TextColor3 = Color3.fromRGB(0, 140, 255)
+        copyKsBtn.Font = Enum.Font.GothamBold; copyKsBtn.TextSize = 10
+        copyKsBtn.AutoButtonColor = false; copyKsBtn.Parent = card
+        local kc = Instance.new("UICorner"); kc.CornerRadius = UDim.new(0, 6); kc.Parent = copyKsBtn
+
+        if qq and qq ~= "" then
+            copyKsBtn.Size = UDim2.fromOffset(60, 20); copyKsBtn.Position = UDim2.new(1, -60, 0.5, 4)
+            
+            local copyQQBtn = Instance.new("TextButton")
+            copyQQBtn.Size = UDim2.fromOffset(60, 20); copyQQBtn.Position = UDim2.new(1, -60, 0.5, -24)
+            copyQQBtn.BackgroundColor3 = Color3.fromRGB(200, 205, 215); copyQQBtn.BackgroundTransparency = 0.5
+            copyQQBtn.Text = "复制 QQ"; copyQQBtn.TextColor3 = Color3.fromRGB(0, 140, 255)
+            copyQQBtn.Font = Enum.Font.GothamBold; copyQQBtn.TextSize = 10
+            copyQQBtn.AutoButtonColor = false; copyQQBtn.Parent = card
+            local qc = Instance.new("UICorner"); qc.CornerRadius = UDim.new(0, 6); qc.Parent = copyQQBtn
+
+            copyQQBtn.MouseButton1Click:Connect(function()
+                pcall(function()
+                    if setclipboard then
+                        setclipboard(tostring(qq))
+                        copyQQBtn.Text = "已复制!"
+                        task.delay(1.5, function() copyQQBtn.Text = "复制 QQ" end)
+                    end
+                end)
+            end)
+        else
+            copyKsBtn.Size = UDim2.fromOffset(60, 24)
+            copyKsBtn.Position = UDim2.new(1, -60, 0.5, -12)
+        end
+
+        copyKsBtn.MouseButton1Click:Connect(function()
+            pcall(function()
+                if setclipboard then
+                    setclipboard(copyText)
+                    copyKsBtn.Text = "已复制!"
+                    task.delay(1.5, function() copyKsBtn.Text = "复制快手" end)
+                end
+            end)
+        end)
+
+        return card
+    end
+
+    -- 🎯 3. 从零开始，按你要的顺序强制重新构建所有内容
+
+    -- ① 重新写回【 脚本作者 】标题
+    makeTitle("【 脚本作者 】")
+
+    -- ② 重新写回 作者卡片
+    local authorCard = createCard(false, "神 (Shen Hub 开发者)", "快手号: 5733022742", "5733022742", "", "rbxassetid://73308017224118")
+    -- 为了和原版一致，作者名字上面那个“作者”我是写在顶部标题里的，这里可以微调一下
+    local authorTitle = Instance.new("TextLabel")
+    authorTitle.Size = UDim2.new(1, -190, 0, 16); authorTitle.Position = UDim2.fromOffset(60, 0)
+    authorTitle.BackgroundTransparency = 1; authorTitle.Text = "作者"
+    authorTitle.TextColor3 = Color3.fromRGB(0, 140, 255); authorTitle.Font = Enum.Font.GothamBold
+    authorTitle.TextSize = 12; authorTitle.TextXAlignment = Enum.TextXAlignment.Left
+    authorTitle.Parent = authorCard
+
+    -- ③ QQ 群按钮
+    createCard(true)
+
+    -- ④ 【 内测人员名单 】标题
+    makeTitle("【 内测人员名单 】")
+
+    -- ⑤ 蛋仔派对板栗王（带 QQ 按钮）
+    createCard(false, "蛋仔派对板栗王", "快手号：5721155297", "5721155297", "2580525466", "rbxassetid://112961077620856")
+
+    -- ⑥ HPttttt（只有快手）
+    createCard(false, "HPttttt", "快手号：5837278690", "5837278690", "", "rbxassetid://118929068984066")
+
+    -- ⑦ 神秘培根9871（只有快手）
+    createCard(false, "神秘培根9871", "快手号：5663569162", "5663569162", "", "rbxassetid://108164029972269")
+
+end)
+
+-- =========================================================
+-- 🎬 末尾补丁：赛博风加载动画 v3（含身份验证区）
+-- 头像 + 名字 + 动态密钥 + 验证成功
+-- =========================================================
+task.spawn(function()
+    local Players = game:GetService("Players")
+    local TweenService = game:GetService("TweenService")
+    local RunService = game:GetService("RunService")
+    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+    local localPlayer = Players.LocalPlayer
+
+    -- 等待 N9Hub
+    local n9 = nil
+    local t0 = tick()
+    while tick() - t0 < 300 do
+        n9 = playerGui:FindFirstChild("N9Hub")
+        if n9 then break end
+        task.wait(0.03)
+    end
+    if not n9 then return end
+
+    local mainWin = n9:FindFirstChild("MainWindow")
+    local openBtn = n9:FindFirstChild("OpenButton")
+    local savedWinVis = mainWin and mainWin.Visible
+    local savedBtnVis = openBtn and openBtn.Visible
+    if mainWin then mainWin.Visible = false end
+    if openBtn then openBtn.Visible = false end
+
+    -- 收集玩家信息
+    local displayName = localPlayer.DisplayName
+    local userName = localPlayer.Name
+    local userId = localPlayer.UserId
+    local avatarUrl = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(userId) .. "&w=150&h=150"
+
+    -- 生成"密钥"（用 UserId + 随机数拼一个十六进制串，视觉上像加密 key）
+    local function makeHexKey(len)
+        local chars = "0123456789ABCDEF"
+        local out = {}
+        math.randomseed(userId + os.time())
+        for i = 1, len do
+            local idx = math.random(1, #chars)
+            out[i] = chars:sub(idx, idx)
+        end
+        return table.concat(out)
+    end
+    local keyPart1 = makeHexKey(4)
+    local keyPart2 = makeHexKey(4)
+    local keyPart3 = makeHexKey(4)
+    local keyPart4 = makeHexKey(4)
+    local fullKey = keyPart1.."-"..keyPart2.."-"..keyPart3.."-"..keyPart4
+
+    -- ============ 全屏科技层 ============
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "ShenIntroCyber"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 2147483647
+    gui.Parent = playerGui
+
+    -- 深空渐变底
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.fromScale(1, 1)
+    bg.BackgroundColor3 = Color3.fromRGB(4, 6, 10)
+    bg.BorderSizePixel = 0
+    bg.ZIndex = 1
+    bg.Parent = gui
+    local bgGrad = Instance.new("UIGradient")
+    bgGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(6, 10, 18)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(10, 18, 30)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 10, 18)),
+    })
+    bgGrad.Rotation = 90
+    bgGrad.Parent = bg
+
+    -- 极淡网格
+    for i = 1, 12 do
+        local line = Instance.new("Frame")
+        line.Size = UDim2.new(1, 0, 0, 1)
+        line.Position = UDim2.new(0, 0, i / 13, 0)
+        line.BackgroundColor3 = Color3.fromRGB(0, 140, 200)
+        line.BackgroundTransparency = 0.94
+        line.BorderSizePixel = 0
+        line.ZIndex = 2
+        line.Parent = bg
+    end
+    for i = 1, 12 do
+        local line = Instance.new("Frame")
+        line.Size = UDim2.new(0, 1, 1, 0)
+        line.Position = UDim2.new(i / 13, 0, 0, 0)
+        line.BackgroundColor3 = Color3.fromRGB(0, 140, 200)
+        line.BackgroundTransparency = 0.94
+        line.BorderSizePixel = 0
+        line.ZIndex = 2
+        line.Parent = bg
+    end
+
+    -- 扫描线
+    local scanLine = Instance.new("Frame")
+    scanLine.Size = UDim2.new(1, 0, 0, 2)
+    scanLine.Position = UDim2.new(0, 0, 0, 0)
+    scanLine.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+    scanLine.BackgroundTransparency = 0.5
+    scanLine.BorderSizePixel = 0
+    scanLine.ZIndex = 3
+    scanLine.Parent = bg
+    local scanGrad = Instance.new("UIGradient")
+    scanGrad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.5, 0),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    scanGrad.Parent = scanLine
+
+    -- 中央微光
+    local glow = Instance.new("ImageLabel")
+    glow.Size = UDim2.fromOffset(900, 900)
+    glow.Position = UDim2.new(0.5, 0, 0.5, 0)
+    glow.AnchorPoint = Vector2.new(0.5, 0.5)
+    glow.BackgroundTransparency = 1
+    glow.Image = "rbxassetid://5028857084"
+    glow.ImageColor3 = Color3.fromRGB(0, 160, 220)
+    glow.ImageTransparency = 0.55
+    glow.ScaleType = Enum.ScaleType.Fit
+    glow.ZIndex = 2
+    glow.Parent = bg
+
+    -- ============ 中央 HUD 卡（加高，容纳验证区）============
+    local card = Instance.new("Frame")
+    card.Size = UDim2.fromOffset(520, 380)
+    card.Position = UDim2.new(0.5, 0, 0.5, 0)
+    card.AnchorPoint = Vector2.new(0.5, 0.5)
+    card.BackgroundColor3 = Color3.fromRGB(8, 14, 24)
+    card.BackgroundTransparency = 0.2
+    card.BorderSizePixel = 0
+    card.ZIndex = 5
+    card.Parent = bg
+    local cardStroke = Instance.new("UIStroke")
+    cardStroke.Color = Color3.fromRGB(0, 160, 220)
+    cardStroke.Thickness = 1
+    cardStroke.Transparency = 0.4
+    cardStroke.Parent = card
+
+    -- 四角装饰
+    local function cornerMark(posX, posY, rot)
+        local mark = Instance.new("Frame")
+        mark.Size = UDim2.fromOffset(18, 18)
+        mark.Position = UDim2.new(posX, 0, posY, 0)
+        mark.AnchorPoint = Vector2.new(posX, posY)
+        mark.BackgroundTransparency = 1
+        mark.ZIndex = 6
+        mark.Parent = card
+        local h = Instance.new("Frame")
+        h.Size = UDim2.new(1, 0, 0, 2)
+        h.Position = UDim2.fromOffset(0, rot and 16 or 0)
+        h.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+        h.BorderSizePixel = 0
+        h.ZIndex = 6
+        h.Parent = mark
+        local v = Instance.new("Frame")
+        v.Size = UDim2.new(0, 2, 1, 0)
+        v.Position = UDim2.fromOffset(rot and 16 or 0, 0)
+        v.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+        v.BorderSizePixel = 0
+        v.ZIndex = 6
+        v.Parent = mark
+    end
+    cornerMark(0, 0, false)
+    cornerMark(1, 0, true)
+    cornerMark(0, 1, true)
+    cornerMark(1, 1, false)
+
+    -- 顶部状态行
+    local topBar = Instance.new("Frame")
+    topBar.Size = UDim2.new(1, -40, 0, 18)
+    topBar.Position = UDim2.fromOffset(20, 16)
+    topBar.BackgroundTransparency = 1
+    topBar.ZIndex = 6
+    topBar.Parent = card
+    local sysLbl = Instance.new("TextLabel")
+    sysLbl.Size = UDim2.new(1, -80, 1, 0)
+    sysLbl.BackgroundTransparency = 1
+    sysLbl.Text = "SHEN · SYSTEM · v1.0"
+    sysLbl.TextColor3 = Color3.fromRGB(0, 180, 220)
+    sysLbl.Font = Enum.Font.Code
+    sysLbl.TextSize = 11
+    sysLbl.TextXAlignment = Enum.TextXAlignment.Left
+    sysLbl.ZIndex = 6
+    sysLbl.Parent = topBar
+    local blinkLbl = Instance.new("TextLabel")
+    blinkLbl.Size = UDim2.fromOffset(80, 18)
+    blinkLbl.Position = UDim2.new(1, -80, 0, 0)
+    blinkLbl.BackgroundTransparency = 1
+    blinkLbl.Text = "● ONLINE"
+    blinkLbl.TextColor3 = Color3.fromRGB(0, 220, 140)
+    blinkLbl.Font = Enum.Font.Code
+    blinkLbl.TextSize = 11
+    blinkLbl.TextXAlignment = Enum.TextXAlignment.Right
+    blinkLbl.ZIndex = 6
+    blinkLbl.Parent = topBar
+
+    -- ============ 身份验证区（头像 + 名字 + 密钥）============
+    local verifyFrame = Instance.new("Frame")
+    verifyFrame.Size = UDim2.new(1, -40, 0, 80)
+    verifyFrame.Position = UDim2.fromOffset(20, 44)
+    verifyFrame.BackgroundColor3 = Color3.fromRGB(10, 18, 30)
+    verifyFrame.BackgroundTransparency = 0.3
+    verifyFrame.BorderSizePixel = 0
+    verifyFrame.ZIndex = 6
+    verifyFrame.Parent = card
+    local vfc = Instance.new("UICorner"); vfc.CornerRadius = UDim.new(0, 4); vfc.Parent = verifyFrame
+    local vfs = Instance.new("UIStroke")
+    vfs.Color = Color3.fromRGB(0, 160, 220)
+    vfs.Thickness = 1
+    vfs.Transparency = 0.6
+    vfs.Parent = verifyFrame
+
+    -- 头像（带头像光环）
+    local avatarHolder = Instance.new("Frame")
+    avatarHolder.Size = UDim2.fromOffset(56, 56)
+    avatarHolder.Position = UDim2.fromOffset(12, 12)
+    avatarHolder.BackgroundColor3 = Color3.fromRGB(0, 20, 30)
+    avatarHolder.BorderSizePixel = 0
+    avatarHolder.ZIndex = 7
+    avatarHolder.Parent = verifyFrame
+    local ahc = Instance.new("UICorner"); ahc.CornerRadius = UDim.new(1, 0); ahc.Parent = avatarHolder
+    local ahs = Instance.new("UIStroke")
+    ahs.Color = Color3.fromRGB(0, 200, 255)
+    ahs.Thickness = 2
+    ahs.Transparency = 0.2
+    ahs.Parent = avatarHolder
+
+    local avatarImg = Instance.new("ImageLabel")
+    avatarImg.Size = UDim2.fromScale(1, 1)
+    avatarImg.BackgroundTransparency = 1
+    avatarImg.Image = avatarUrl
+    avatarImg.ScaleType = Enum.ScaleType.Crop
+    avatarImg.ZIndex = 8
+    avatarImg.Parent = avatarHolder
+    local aic = Instance.new("UICorner"); aic.CornerRadius = UDim.new(1, 0); aic.Parent = avatarImg
+
+    -- 玩家名
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Size = UDim2.new(1, -80, 0, 18)
+    nameLbl.Position = UDim2.fromOffset(80, 12)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Text = displayName
+    nameLbl.TextColor3 = Color3.fromRGB(220, 240, 255)
+    nameLbl.Font = Enum.Font.GothamBold
+    nameLbl.TextSize = 15
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    nameLbl.TextTransparency = 1
+    nameLbl.ZIndex = 7
+    nameLbl.Parent = verifyFrame
+
+    -- 用户名（@xxx）
+    local userLbl = Instance.new("TextLabel")
+    userLbl.Size = UDim2.new(1, -80, 0, 14)
+    userLbl.Position = UDim2.fromOffset(80, 32)
+    userLbl.BackgroundTransparency = 1
+    userLbl.Text = "@" .. userName .. "  ·  ID: " .. tostring(userId)
+    userLbl.TextColor3 = Color3.fromRGB(100, 130, 160)
+    userLbl.Font = Enum.Font.Code
+    userLbl.TextSize = 10
+    userLbl.TextXAlignment = Enum.TextXAlignment.Left
+    userLbl.TextTransparency = 1
+    userLbl.ZIndex = 7
+    userLbl.Parent = verifyFrame
+
+    -- 密钥行（视觉上像"密码"）
+    local keyLbl = Instance.new("TextLabel")
+    keyLbl.Size = UDim2.new(1, -80, 0, 14)
+    keyLbl.Position = UDim2.fromOffset(80, 50)
+    keyLbl.BackgroundTransparency = 1
+    keyLbl.Text = "KEY: " .. fullKey
+    keyLbl.TextColor3 = Color3.fromRGB(0, 180, 220)
+    keyLbl.Font = Enum.Font.Code
+    keyLbl.TextSize = 10
+    keyLbl.TextXAlignment = Enum.TextXAlignment.Left
+    keyLbl.TextTransparency = 1
+    keyLbl.ZIndex = 7
+    keyLbl.Parent = verifyFrame
+
+    -- 验证状态（右侧）
+    local verifyStatus = Instance.new("TextLabel")
+    verifyStatus.Size = UDim2.fromOffset(140, 24)
+    verifyStatus.Position = UDim2.new(1, -150, 0.5, -12)
+    verifyStatus.BackgroundTransparency = 1
+    verifyStatus.Text = "VERIFYING..."
+    verifyStatus.TextColor3 = Color3.fromRGB(255, 200, 60)
+    verifyStatus.Font = Enum.Font.Code
+    verifyStatus.TextSize = 12
+    verifyStatus.TextXAlignment = Enum.TextXAlignment.Right
+    verifyStatus.ZIndex = 7
+    verifyStatus.Parent = verifyFrame
+
+    -- ============ 标题 & 进度 ============
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size = UDim2.new(1, -40, 0, 30)
+    titleLbl.Position = UDim2.fromOffset(20, 138)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = "欢 迎 使 用 神 脚 本"
+    titleLbl.TextColor3 = Color3.fromRGB(220, 240, 255)
+    titleLbl.Font = Enum.Font.GothamMedium
+    titleLbl.TextSize = 20
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.TextTransparency = 1
+    titleLbl.ZIndex = 6
+    titleLbl.Parent = card
+    local titleStroke = Instance.new("UIStroke")
+    titleStroke.Color = Color3.fromRGB(0, 180, 255)
+    titleStroke.Thickness = 0.6
+    titleStroke.Transparency = 0.6
+    titleStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    titleStroke.Parent = titleLbl
+
+    local subLbl = Instance.new("TextLabel")
+    subLbl.Size = UDim2.new(1, -40, 0, 14)
+    subLbl.Position = UDim2.fromOffset(20, 170)
+    subLbl.BackgroundTransparency = 1
+    subLbl.Text = "THANK YOU FOR USING"
+    subLbl.TextColor3 = Color3.fromRGB(100, 130, 160)
+    subLbl.Font = Enum.Font.Code
+    subLbl.TextSize = 10
+    subLbl.TextXAlignment = Enum.TextXAlignment.Left
+    subLbl.TextTransparency = 1
+    subLbl.ZIndex = 6
+    subLbl.Parent = card
+
+    local percentLbl = Instance.new("TextLabel")
+    percentLbl.Size = UDim2.fromOffset(200, 50)
+    percentLbl.Position = UDim2.fromOffset(20, 196)
+    percentLbl.BackgroundTransparency = 1
+    percentLbl.Text = "0%"
+    percentLbl.TextColor3 = Color3.fromRGB(0, 200, 255)
+    percentLbl.Font = Enum.Font.Code
+    percentLbl.TextSize = 40
+    percentLbl.TextXAlignment = Enum.TextXAlignment.Left
+    percentLbl.ZIndex = 6
+    percentLbl.Parent = card
+
+    local loadingLbl = Instance.new("TextLabel")
+    loadingLbl.Size = UDim2.fromOffset(140, 20)
+    loadingLbl.Position = UDim2.new(1, -160, 0, 206)
+    loadingLbl.BackgroundTransparency = 1
+    loadingLbl.Text = "LOADING..."
+    loadingLbl.TextColor3 = Color3.fromRGB(0, 180, 220)
+    loadingLbl.Font = Enum.Font.Code
+    loadingLbl.TextSize = 12
+    loadingLbl.TextXAlignment = Enum.TextXAlignment.Right
+    loadingLbl.ZIndex = 6
+    loadingLbl.Parent = card
+
+    local statusLbl = Instance.new("TextLabel")
+    statusLbl.Size = UDim2.fromOffset(200, 20)
+    statusLbl.Position = UDim2.new(1, -220, 0, 228)
+    statusLbl.BackgroundTransparency = 1
+    statusLbl.Text = "INIT..."
+    statusLbl.TextColor3 = Color3.fromRGB(80, 110, 140)
+    statusLbl.Font = Enum.Font.Code
+    statusLbl.TextSize = 11
+    statusLbl.TextXAlignment = Enum.TextXAlignment.Right
+    statusLbl.ZIndex = 6
+    statusLbl.Parent = card
+
+    -- 进度条
+    local barBg = Instance.new("Frame")
+    barBg.Size = UDim2.new(1, -40, 0, 4)
+    barBg.Position = UDim2.new(0, 20, 0, 288)
+    barBg.BackgroundColor3 = Color3.fromRGB(20, 30, 45)
+    barBg.BorderSizePixel = 0
+    barBg.ZIndex = 6
+    barBg.Parent = card
+    local bbc = Instance.new("UICorner"); bbc.CornerRadius = UDim.new(1, 0); bbc.Parent = barBg
+
+    local barFill = Instance.new("Frame")
+    barFill.Size = UDim2.new(0, 0, 1, 0)
+    barFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+    barFill.BorderSizePixel = 0
+    barFill.ZIndex = 7
+    barFill.Parent = barBg
+    local bfc = Instance.new("UICorner"); bfc.CornerRadius = UDim.new(1, 0); bfc.Parent = barFill
+    local barGrad = Instance.new("UIGradient")
+    barGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 120, 200)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 220, 255)),
+    })
+    barGrad.Parent = barFill
+
+    local barShine = Instance.new("Frame")
+    barShine.Size = UDim2.new(0.15, 0, 1, 0)
+    barShine.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    barShine.BackgroundTransparency = 0.4
+    barShine.BorderSizePixel = 0
+    barShine.ZIndex = 8
+    barShine.Parent = barFill
+    local shineGrad = Instance.new("UIGradient")
+    shineGrad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.5, 0),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    shineGrad.Parent = barShine
+
+    for i = 1, 9 do
+        local tickMark = Instance.new("Frame")
+        tickMark.Size = UDim2.new(0, 1, 0, 6)
+        tickMark.Position = UDim2.new(i / 10, -0.5, 1, 0)
+        tickMark.BackgroundColor3 = Color3.fromRGB(60, 100, 140)
+        tickMark.BorderSizePixel = 0
+        tickMark.ZIndex = 7
+        tickMark.Parent = barBg
+    end
+
+    local footerLbl = Instance.new("TextLabel")
+    footerLbl.Size = UDim2.new(1, -40, 0, 14)
+    footerLbl.Position = UDim2.fromOffset(20, 302)
+    footerLbl.BackgroundTransparency = 1
+    footerLbl.Text = "SECURE CONNECTION · ENCRYPTED"
+    footerLbl.TextColor3 = Color3.fromRGB(50, 70, 90)
+    footerLbl.Font = Enum.Font.Code
+    footerLbl.TextSize = 10
+    footerLbl.TextXAlignment = Enum.TextXAlignment.Left
+    footerLbl.ZIndex = 6
+    footerLbl.Parent = card
+
+    local verLbl = Instance.new("TextLabel")
+    verLbl.Size = UDim2.new(0, 100, 0, 14)
+    verLbl.Position = UDim2.new(1, -120, 0, 302)
+    verLbl.BackgroundTransparency = 1
+    verLbl.Text = "BUILD 2026.10"
+    verLbl.TextColor3 = Color3.fromRGB(50, 70, 90)
+    verLbl.Font = Enum.Font.Code
+    verLbl.TextSize = 10
+    verLbl.TextXAlignment = Enum.TextXAlignment.Right
+    verLbl.ZIndex = 6
+    verLbl.Parent = card
+
+    -- 入场动画
+    TweenService:Create(nameLbl, TweenInfo.new(0.4), {TextTransparency = 0}):Play()
+    task.delay(0.2, function()
+        TweenService:Create(userLbl, TweenInfo.new(0.4), {TextTransparency = 0}):Play()
+    end)
+    task.delay(0.4, function()
+        TweenService:Create(keyLbl, TweenInfo.new(0.4), {TextTransparency = 0}):Play()
+    end)
+    task.delay(0.6, function()
+        TweenService:Create(titleLbl, TweenInfo.new(0.6), {TextTransparency = 0}):Play()
+    end)
+    task.delay(0.85, function()
+        TweenService:Create(subLbl, TweenInfo.new(0.5), {TextTransparency = 0}):Play()
+    end)
+
+    -- 验证：先 "VERIFYING..." 闪烁 ~1 秒，然后变 VERIFIED
+    task.delay(1.0, function()
+        -- 扫描光扫过头像
+        local scanHolder = Instance.new("Frame")
+        scanHolder.Size = UDim2.fromOffset(56, 2)
+        scanHolder.Position = UDim2.fromOffset(12, 12)
+        scanHolder.BackgroundColor3 = Color3.fromRGB(0, 220, 255)
+        scanHolder.BackgroundTransparency = 0.3
+        scanHolder.BorderSizePixel = 0
+        scanHolder.ZIndex = 9
+        scanHolder.Parent = verifyFrame
+        local shc = Instance.new("UICorner"); shc.CornerRadius = UDim.new(1, 0); shc.Parent = scanHolder
+        local shTween = TweenService:Create(scanHolder, TweenInfo.new(0.5), {
+            Position = UDim2.fromOffset(12, 66)
+        })
+        shTween:Play()
+        shTween.Completed:Connect(function()
+            scanHolder:Destroy()
+        end)
+
+        verifyStatus.Text = "✓ VERIFIED"
+        verifyStatus.TextColor3 = Color3.fromRGB(0, 240, 160)
+        ahs.Color = Color3.fromRGB(0, 240, 160)
+    end)
+
+    -- 扫描线 + 流光循环
+    local scanY = 0
+    local spinConn = RunService.RenderStepped:Connect(function(dt)
+        scanY = (scanY + dt * 0.4) % 1
+        scanLine.Position = UDim2.new(0, 0, scanY, 0)
+        if barFill.AbsoluteSize.X > 10 then
+            local shineX = (tick() * 1.2) % 1
+            barShine.Position = UDim2.new(shineX - 0.15, 0, 0, 0)
+        end
+        blinkLbl.TextTransparency = 0.3 + 0.4 * math.abs(math.sin(tick() * 3))
+        glow.ImageTransparency = 0.5 + 0.08 * math.sin(tick() * 1.6)
+    end)
+
+    -- 进度动画
+    local steps = {
+        {target=18, text="LOAD CORE..."},
+        {target=36, text="INIT MODULES..."},
+        {target=54, text="LOAD UI..."},
+        {target=70, text="LOAD FEATURES..."},
+        {target=84, text="LOAD PATCHES..."},
+        {target=94, text="VERIFY..."},
+        {target=100,text="COMPLETE"},
+    }
+    local cur = 0
+    for _, step in ipairs(steps) do
+        statusLbl.Text = step.text
+        local from, to = cur, step.target
+        local duration = 0.45 + math.random() * 0.2
+        local startT = tick()
+        task.spawn(function()
+            while true do
+                local a = tick() - startT
+                if a >= duration then
+                    percentLbl.Text = tostring(to).."%"
+                    break
+                end
+                local r = a / duration
+                local eased = 1 - (1 - r) * (1 - r)
+                percentLbl.Text = tostring(math.floor(from + (to - from) * eased)).."%"
+                task.wait(0.01)
+            end
+        end)
+        TweenService:Create(barFill, TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Size = UDim2.new(to / 100, 0, 1, 0)
+        }):Play()
+        task.wait(duration + 0.05)
+        cur = to
+    end
+
+    -- 完成
+    percentLbl.Text = "100%"
+    percentLbl.TextColor3 = Color3.fromRGB(0, 240, 160)
+    cardStroke.Color = Color3.fromRGB(0, 240, 160)
+    vfs.Color = Color3.fromRGB(0, 240, 160)
+    statusLbl.Text = "READY"
+    statusLbl.TextColor3 = Color3.fromRGB(0, 240, 160)
+    loadingLbl.Text = "ONLINE ✓"
+    loadingLbl.TextColor3 = Color3.fromRGB(0, 240, 160)
+    barFill.BackgroundColor3 = Color3.fromRGB(0, 240, 160)
+    task.wait(0.6)
+
+    -- 淡出
+    local fadeInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+    TweenService:Create(bg, fadeInfo, {BackgroundTransparency = 1}):Play()
+    TweenService:Create(card, fadeInfo, {BackgroundTransparency = 1}):Play()
+    TweenService:Create(cardStroke, fadeInfo, {Transparency = 1}):Play()
+    TweenService:Create(verifyFrame, fadeInfo, {BackgroundTransparency = 1}):Play()
+    TweenService:Create(vfs, fadeInfo, {Transparency = 1}):Play()
+    TweenService:Create(avatarHolder, fadeInfo, {BackgroundTransparency = 1}):Play()
+    TweenService:Create(ahs, fadeInfo, {Transparency = 1}):Play()
+    TweenService:Create(avatarImg, fadeInfo, {ImageTransparency = 1}):Play()
+    TweenService:Create(glow, fadeInfo, {ImageTransparency = 1}):Play()
+    TweenService:Create(scanLine, fadeInfo, {BackgroundTransparency = 1}):Play()
+    for _, c in ipairs({titleLbl, subLbl, percentLbl, statusLbl, loadingLbl, sysLbl, blinkLbl, footerLbl, verLbl, nameLbl, userLbl, keyLbl, verifyStatus}) do
+        TweenService:Create(c, fadeInfo, {TextTransparency = 1}):Play()
+    end
+    TweenService:Create(barBg, fadeInfo, {BackgroundTransparency = 1}):Play()
+    TweenService:Create(barFill, fadeInfo, {BackgroundTransparency = 1}):Play()
+    TweenService:Create(barShine, fadeInfo, {BackgroundTransparency = 1}):Play()
+
+    task.wait(0.6)
+    if spinConn then spinConn:Disconnect() end
+    pcall(function() gui:Destroy() end)
+
+    if mainWin then mainWin.Visible = savedWinVis end
+    if openBtn then openBtn.Visible = savedBtnVis end
+end)
+-- =========================================================
+-- 💬 末尾补丁：入场特效结束后，过 2 秒在聊天框发送欢迎消息
+-- =========================================================
+task.spawn(function()
+    local Players = game:GetService("Players")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+    -- ① 等 N9Hub 出现
+    local n9 = nil
+    local t0 = tick()
+    while tick() - t0 < 300 do
+        n9 = playerGui:FindFirstChild("N9Hub")
+        if n9 then break end
+        task.wait(0.01)
+    end
+    if not n9 then return end
+
+    -- ② 等入场特效层出现
+    local t1 = tick()
+    while tick() - t1 < 20 do
+        if playerGui:FindFirstChild("ShenIntroCyber") then break end
+        task.wait(0.01)
+    end
+
+    -- ③ 等入场特效层消失（脚本加载完成）
+    local t2 = tick()
+    while tick() - t2 < 60 do
+        if not playerGui:FindFirstChild("ShenIntroCyber") then break end
+        task.wait(0.01)
+    end
+
+    -- ④ 特效消失后再等 2 秒，等界面稳定
+    task.wait(2)
+
+    local msg = "欢迎尊贵的用户，祝您游戏愉快！"
+    local sent = false
+
+    -- 尝试 1：新版聊天系统
+    pcall(function()
+        local TextChatService = game:GetService("TextChatService")
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            local channels = TextChatService:FindFirstChild("TextChannels")
+            local rb = channels and channels:FindFirstChild("RBXGeneral")
+            if rb then
+                local ok = pcall(function() rb:SendAsync(msg) end)
+                if ok then sent = true end
+            end
+        end
+    end)
+
+    -- 尝试 2：旧版聊天系统
+    if not sent then
+        pcall(function()
+            local chatEvents = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+            local sayReq = chatEvents and chatEvents:FindFirstChild("SayMessageRequest")
+            if sayReq then
+                sayReq:FireServer(msg, "All")
+                sent = true
+            end
+        end)
+    end
+
+    -- 保底：右上角通知
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "👋 欢迎",
+            Text = msg,
+            Duration = 5,
+        })
+    end)
 end)
